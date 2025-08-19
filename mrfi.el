@@ -91,6 +91,13 @@ If nil, only the filename is matched."
   (if (null mrfi-extensions) '()
     (apply #'append (mapcar (lambda (e) (list "--extension" e)) mrfi-extensions))))
 
+(defun mrfi--extensions-regexp ()
+  "Return a regexp that matches allowed file extensions.
+If `mrfi-extensions' is nil, return nil to match all files.
+This forms a strict whitelist so files like `foo.org~' are ignored."
+  (when mrfi-extensions
+    (concat "\\." (regexp-opt (mapcar #'downcase mrfi-extensions)) "$")))
+
 (defun mrfi--build-with-fd ()
   (let ((args (append mrfi-extra-fd-args (mrfi--extensions-to-fd-args)
                       (mrfi--roots))))
@@ -99,18 +106,15 @@ If nil, only the filename is matched."
       (error (message "[mrfi] fd error: %s → falling back to Elisp" (error-message-string err))
              nil))))
 
-(defun mrfi--file-ok-p (path)
-  (or (null mrfi-extensions)
-      (let ((ext (file-name-extension path)))
-        (and ext (member (downcase ext) mrfi-extensions)))))
-
 (defun mrfi--build-with-elisp ()
   (let (acc)
     (dolist (root (mrfi--roots))
       (when (file-directory-p root)
-        (dolist (f (directory-files-recursively root ".*" t))
-          (when (and (file-regular-p f) (mrfi--file-ok-p f))
-            (push f acc)))))
+        (let* ((case-fold-search t)
+               (regexp (or (mrfi--extensions-regexp) ".*")))
+          (dolist (f (directory-files-recursively root regexp t))
+            (when (file-regular-p f)
+              (push f acc))))))
     (nreverse acc)))
 
 ;;; Index management
