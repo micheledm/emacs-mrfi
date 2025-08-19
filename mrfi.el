@@ -134,6 +134,12 @@ If QUIET is non-nil, suppress messages."
   (unless (and mrfi--cache mrfi--last-built)
     (mrfi-refresh-index t)))
 
+(defun mrfi--prune-cache ()
+  "Remove vanished or unreadable files from the index."
+  (setq mrfi--cache
+        (cl-remove-if-not (lambda (f) (ignore-errors (file-attributes f)))
+                          mrfi--cache)))
+
 ;;; Alias & relative path
 
 (defun mrfi--root+alias-for (path)
@@ -159,19 +165,20 @@ If QUIET is non-nil, suppress messages."
 ;;; File info
 
 (defun mrfi--file-info (path)
-  "Return plist with :name :size-str :date-str :alias :relpath for PATH."
-  (let* ((attrs (file-attributes path))
-         (size  (file-attribute-size attrs))
-         (mtime (file-attribute-modification-time attrs))
-         (name  (file-name-nondirectory path))
-         (ar    (mrfi--alias-and-rel path))
-         (alias (car ar))
-         (rel   (cadr ar))
-         (size-str (cond ((> size 1048576) (format "%.1fM" (/ size 1048576.0)))
-                         ((> size 1024)    (format "%.1fk" (/ size 1024.0)))
-                         (t                (format "%d" size))))
-         (date-str (format-time-string "%Y-%m-%dT%H:%M" mtime)))
-    (list :name name :size-str size-str :date-str date-str :alias alias :rel rel)))
+  "Return plist with :name :size-str :date-str :alias :relpath for PATH.
+Return nil if PATH cannot be statted."
+  (when-let ((attrs (ignore-errors (file-attributes path))))
+    (let* ((size  (file-attribute-size attrs))
+           (mtime (file-attribute-modification-time attrs))
+           (name  (file-name-nondirectory path))
+           (ar    (mrfi--alias-and-rel path))
+           (alias (car ar))
+           (rel   (cadr ar))
+           (size-str (cond ((> size 1048576) (format "%.1fM" (/ size 1048576.0)))
+                           ((> size 1024)    (format "%.1fk" (/ size 1024.0)))
+                           (t                (format "%d" size))))
+           (date-str (format-time-string "%Y-%m-%dT%H:%M" mtime)))
+      (list :name name :size-str size-str :date-str date-str :alias alias :rel rel))))
 
 ;;; Auto layout
 
@@ -205,44 +212,47 @@ If QUIET is non-nil, suppress messages."
         (concat (make-string (max 0 (- w (string-width tr))) ?\s) tr)
       tr)))
 
-(defun mrfi--display-line (path)
-  "Format a tabular minibuffer line for PATH."
-  (let* ((fi (mrfi--file-info path))
-         (ws (mrfi--compute-widths))
+;;; Reader minibuffer
+
+(defun mrfi--read-file ()
+  "Prompt user to select a file from the index.
+Return the full path."
+  (mrfi--ensure-index)
+  (let* ((ws (mrfi--compute-widths))
          (w-name  (nth 0 ws))
          (w-alias (nth 1 ws))
          (w-size  (nth 2 ws))
          (w-date  (nth 3 ws))
-         (name  (mrfi--pad (plist-get fi :name)  w-name))
-         (alias (mrfi--pad (plist-get fi :alias) w-alias))
-         (size  (mrfi--pad (plist-get fi :size-str) w-size t))
-         (date  (mrfi--pad (plist-get fi :date-str) w-date))
-         (rel   (plist-get fi :rel)))
-    (concat
-     (propertize name  'face 'mrfi-name-face)  "  "
-     (propertize alias 'face 'mrfi-alias-face) "  "
-     (propertize size  'face 'mrfi-size-face)  "  "
-     (propertize date  'face 'mrfi-date-face)  "  "
-     (propertize rel   'face 'mrfi-path-face))))
-
-;;; Reader minibuffer
-
-(defun mrfi--read-file ()
-  "Prompt user to select a file from the index.  
-Return the full path."
-  (mrfi--ensure-index)
-  (let* ((candidates
+         (candidates
           (mapcar
            (lambda (p)
-             (let* ((fi (mrfi--file-info p))
-                    (key (if mrfi-search-in-path
-                             (concat (plist-get fi :alias) (plist-get fi :rel)
-                                     (plist-get fi :name))
-                           (plist-get fi :name))))
-               (propertize (mrfi--display-line p)
+             (let* ((fi   (mrfi--file-info p))
+                    (name (plist-get fi :name))
+                    (key  (if mrfi-search-in-path
+                              (concat (plist-get fi :alias)
+                                      (plist-get fi :rel)
+                                      name)
+                            name)))
+               (propertize name
+                           'face 'mrfi-name-face
                            'mrfi-path p
-                           'completion-search-key key)))
-           mrfi--cache)))
+                           'mrfi-fi fi
+                           'completion-search-key key
+                           'display (mrfi--pad name w-name))))
+           mrfi--cache))
+         (annotation
+          (lambda (cand)
+            (let* ((fi    (get-text-property 0 'mrfi-fi cand))
+                   (alias (mrfi--pad (plist-get fi :alias)    w-alias))
+                   (size  (mrfi--pad (plist-get fi :size-str) w-size t))
+                   (date  (mrfi--pad (plist-get fi :date-str) w-date))
+                   (rel   (plist-get fi :rel)))
+              (concat "  "
+                      (propertize alias 'face 'mrfi-alias-face) "  "
+                      (propertize size  'face 'mrfi-size-face)  "  "
+                      (propertize date  'face 'mrfi-date-face)  "  "
+                      (propertize rel   'face 'mrfi-path-face)))))
+         (completion-extra-properties `(:annotation-function ,annotation)))
     (if (require 'consult nil t)
         (let ((choice (consult--read candidates :prompt "MRFI: "
                                      :require-match t :sort nil :category 'file)))
@@ -270,7 +280,7 @@ Return the full path."
 
 (defun mrfi--populate-list ()
   (mrfi--ensure-index)
-  (setq tabulated-list-entries (mapcar #'mrfi--row mrfi--cache)))
+  (setq tabulated-list-entries (delq nil (mapcar #'mrfi--row mrfi--cache))))
 
 (defun mrfi--open-on-point ()
   (let ((id (tabulated-list-get-id)))
