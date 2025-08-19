@@ -229,19 +229,18 @@ Return the full path."
          (w-date  (nth 3 ws))
          (candidates
           (mapcar
-           (lambda (p)
-             (let* ((fi   (mrfi--file-info p))
-                    (name (plist-get fi :name))
-                    (key  (if mrfi-search-in-path
+          (lambda (p)
+            (let* ((fi   (mrfi--file-info p))
+                   (name (plist-get fi :name))
+                   (key  (if mrfi-search-in-path
                               (concat (plist-get fi :alias)
                                       (plist-get fi :rel)
                                       name)
                             name)))
-               (propertize name
+               (propertize key
                            'face 'mrfi-name-face
                            'mrfi-path p
                            'mrfi-fi fi
-                           'completion-search-key key
                            'display (mrfi--pad name w-name))))
            mrfi--cache))
          (annotation
